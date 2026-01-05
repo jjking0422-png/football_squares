@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
 
 void main() {
@@ -10,8 +11,8 @@ class FootballSquaresApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      // Must be a String (this is NOT the AppBar text)
       title: 'Football Squares',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.green),
         useMaterial3: true,
@@ -31,200 +32,298 @@ class BoardScreen extends StatefulWidget {
 class _BoardScreenState extends State<BoardScreen> {
   static const int gridSize = 10;
 
+  /// When these are non-null, numbers are "generated" and claiming is locked.
+  List<int>? colHeaders; // 10 across the top
+  List<int>? rowHeaders; // 10 down the left
+
   // 10x10 claimed state
   final List<List<bool>> claimed =
       List.generate(gridSize, (_) => List.generate(gridSize, (_) => false));
 
-  // Header numbers (blank until generated)
-  List<int>? colHeaders; // top row (10 numbers)
-  List<int>? rowHeaders; // left column (10 numbers)
+  // 10x10 claimed names (empty string = unclaimed)
+  final List<List<String>> names =
+      List.generate(gridSize, (_) => List.generate(gridSize, (_) => ''));
 
-  void _toggleClaim(int row, int col) {
-  // Lock the board once numbers are generated
-  if (colHeaders != null || rowHeaders != null) return;
-
-  setState(() {
-    claimed[row][col] = !claimed[row][col];
-  });
-}
-
+  bool get _locked => (colHeaders != null || rowHeaders != null);
 
   bool _allClaimed() {
     for (final row in claimed) {
-      for (final v in row) {
-        if (!v) return false;
+      for (final cell in row) {
+        if (!cell) return false;
       }
     }
     return true;
   }
 
-  void _generateHeaders() {
+  List<int> _shuffledDigits() {
+    final digits = List<int>.generate(10, (i) => i);
+    digits.shuffle(Random());
+    return digits;
+  }
+
+  void _generateNumbers() {
     if (!_allClaimed()) return;
 
-    final cols = List<int>.generate(10, (i) => i)..shuffle();
-    final rows = List<int>.generate(10, (i) => i)..shuffle();
+    setState(() {
+      colHeaders = _shuffledDigits();
+      rowHeaders = _shuffledDigits();
+    });
+  }
+
+  void _resetBoard() {
+    setState(() {
+      colHeaders = null;
+      rowHeaders = null;
+
+      for (int r = 0; r < gridSize; r++) {
+        for (int c = 0; c < gridSize; c++) {
+          claimed[r][c] = false;
+          names[r][c] = '';
+        }
+      }
+    });
+  }
+
+  String _formatNameForCell(String raw) {
+    final parts = raw.trim().split(RegExp(r'\s+'));
+    if (parts.isEmpty) return '';
+    if (parts.length == 1) return parts[0];
+    return '${parts.first}\n${parts.sublist(1).join(' ')}';
+  }
+
+  Future<void> _toggleClaim(int row, int col) async {
+    // Lock the board once numbers are generated
+    if (_locked) return;
+
+    // Tap again to unclaim (clears name)
+    if (claimed[row][col]) {
+      setState(() {
+        claimed[row][col] = false;
+        names[row][col] = '';
+      });
+      return;
+    }
+
+    final controller = TextEditingController();
+
+    final String? enteredName = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Claim square'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            textInputAction: TextInputAction.done,
+            decoration: const InputDecoration(
+              labelText: 'Name',
+              hintText: 'First Last',
+            ),
+            onSubmitted: (_) =>
+                Navigator.of(context).pop(controller.text.trim()),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(null),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  Navigator.of(context).pop(controller.text.trim()),
+              child: const Text('Claim'),
+            ),
+          ],
+        );
+      },
+    );
+
+    final name = (enteredName ?? '').trim();
+    if (name.isEmpty) return;
 
     setState(() {
-      colHeaders = cols;
-      rowHeaders = rows;
+      claimed[row][col] = true;
+      names[row][col] = name;
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    // 11x11: [0,0] is the blank corner, top row is column headers,
-    // left column is row headers, and the 10x10 claimable squares are the rest.
+    final bool canGenerate = _allClaimed() && !_locked;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Football Squares'),
+        actions: [
+          IconButton(
+            tooltip: 'Reset',
+            onPressed: _resetBoard,
+            icon: const Icon(Icons.refresh),
+          ),
+        ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(12),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            // Reserve space for the button + spacing so the grid doesn't overflow.
-const double controlsHeight = 70; // button + gap (tweak if needed)
-
-final double usableHeight =
-    (constraints.maxHeight - controlsHeight).clamp(0, constraints.maxHeight);
-
-final double side =
-    (constraints.maxWidth < usableHeight ? constraints.maxWidth : usableHeight);
-
-final double cellSize = side / (gridSize + 1);
-
-
-            return Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
+      body: SafeArea(
+        child: Column(
+          children: [
+            // Controls / status (this area can take some height)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  SizedBox(
-                    width: cellSize * (gridSize + 1),
-                    height: cellSize * (gridSize + 1),
-                    child: Column(
-                      children: List.generate(gridSize + 1, (r) {
-                        return Row(
-                          children: List.generate(gridSize + 1, (c) {
-                            // Top-left corner (blank)
-                            if (r == 0 && c == 0) {
-                              return _HeaderCell(size: cellSize, label: '');
-                            }
-
-                            // Top header row (blank until generated)
-                            if (r == 0 && c > 0) {
-                              final label = (colHeaders == null)
-                                  ? ''
-                                  : '${colHeaders![c - 1]}';
-                              return _HeaderCell(size: cellSize, label: label);
-                            }
-
-                            // Left header column (blank until generated)
-                            if (c == 0 && r > 0) {
-                              final label = (rowHeaders == null)
-                                  ? ''
-                                  : '${rowHeaders![r - 1]}';
-                              return _HeaderCell(size: cellSize, label: label);
-                            }
-
-                            // Claimable cell (10x10 area)
-                            final int row = r - 1;
-                            final int col = c - 1;
-                            final bool isClaimed = claimed[row][col];
-
-                            return GestureDetector(
-                              onTap: () => _toggleClaim(row, col),
-                              child: _SquareCell(
-                                size: cellSize,
-                                row: row,
-                                col: col,
-                                label: '',
-                                isClaimed: isClaimed,
-                              ),
-                            );
-                          }),
-                        );
-                      }),
-                    ),
+                  FilledButton(
+                    onPressed: canGenerate ? _generateNumbers : null,
+                    child: const Text('Generate Numbers'),
                   ),
-                  const SizedBox(height: 12),
-                  ElevatedButton(
-                    onPressed: _allClaimed() ? _generateHeaders : null,
+                  const SizedBox(width: 12),
+                  Flexible(
                     child: Text(
-                      _allClaimed()
-                          ? 'Generate Numbers'
-                          : 'Claim all squares to generate',
+                      _locked
+                          ? 'Locked (numbers generated)'
+                          : (_allClaimed()
+                              ? 'All claimed — ready to generate'
+                              : 'Claim all squares to unlock'),
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
                 ],
               ),
-            );
-          },
+            ),
+
+            // Grid area (Expanded prevents bottom overflow)
+            Expanded(
+              child: Center(
+                child: LayoutBuilder(
+                  builder: (context, gridConstraints) {
+                    // Make the grid fit inside the available expanded area
+                    final side =
+                        min(gridConstraints.maxWidth, gridConstraints.maxHeight);
+                    final cellSize = side / (gridSize + 1);
+
+                    return SizedBox(
+                      width: cellSize * (gridSize + 1),
+                      height: cellSize * (gridSize + 1),
+                      child: Column(
+                        children: List.generate(gridSize + 1, (r) {
+                          return Row(
+                            children: List.generate(gridSize + 1, (c) {
+                              // Top-left blank
+                              if (r == 0 && c == 0) {
+                                return _headerCell(
+                                  size: cellSize,
+                                  child: const SizedBox.shrink(),
+                                );
+                              }
+
+                              // Top headers (columns)
+                              if (r == 0 && c > 0) {
+                                final idx = c - 1;
+                                final text = colHeaders == null
+                                    ? ''
+                                    : '${colHeaders![idx]}';
+                                return _headerCell(
+                                  size: cellSize,
+                                  child: Text(
+                                    text,
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.bold),
+                                  ),
+                                );
+                              }
+
+                              // Left headers (rows)
+                              if (c == 0 && r > 0) {
+                                final idx = r - 1;
+                                final text = rowHeaders == null
+                                    ? ''
+                                    : '${rowHeaders![idx]}';
+                                return _headerCell(
+                                  size: cellSize,
+                                  child: Text(
+                                    text,
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.bold),
+                                  ),
+                                );
+                              }
+
+                              // Claimable squares
+                              final row = r - 1;
+                              final col = c - 1;
+                              final isClaimed = claimed[row][col];
+                              final displayName =
+                                  isClaimed ? _formatNameForCell(names[row][col]) : '';
+
+                              return GestureDetector(
+                                onTap: () => _toggleClaim(row, col),
+                                child: Container(
+                                  width: cellSize,
+                                  height: cellSize,
+                                  decoration: BoxDecoration(
+                                    border: Border.all(
+                                        color: Theme.of(context).dividerColor),
+                                    color: isClaimed
+                                        ? Theme.of(context)
+                                            .colorScheme
+                                            .primary
+                                            .withOpacity(0.15)
+                                        : null,
+                                  ),
+                                  padding: const EdgeInsets.all(4),
+                                  child: Center(
+  child: FittedBox(
+    fit: BoxFit.scaleDown,
+    child: Text(
+      displayName,
+      textAlign: TextAlign.center,
+      softWrap: false, // IMPORTANT: prevents breaking "Jeremy" into "Jere/my"
+      maxLines: 2,
+      style: TextStyle(
+        fontSize: 14, // base size; FittedBox will shrink if needed
+        height: 1.05,
+        fontWeight: isClaimed ? FontWeight.w600 : FontWeight.normal,
+      ),
+    ),
+  ),
+),
+
+                                ),
+                              );
+                            }),
+                          );
+                        }),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+
+            // Footer note (small)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+              child: Text(
+                _locked
+                    ? 'Reset to unlock claiming again.'
+                    : 'Tap a square to claim it with a name. Tap again to unclaim.',
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
-}
 
-class _HeaderCell extends StatelessWidget {
-  final double size;
-  final String label;
-
-  const _HeaderCell({required this.size, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
+  Widget _headerCell({required double size, required Widget child}) {
+    return Container(
       width: size,
       height: size,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          border: Border.all(color: Colors.black26),
-          color: Colors.black12,
-        ),
-        child: Center(
-          child: Text(
-            label,
-            style: const TextStyle(fontWeight: FontWeight.w700),
-          ),
-        ),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        border: Border.all(color: Theme.of(context).dividerColor),
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
       ),
-    );
-  }
-}
-
-class _SquareCell extends StatelessWidget {
-  final double size;
-  final int row;
-  final int col;
-  final String label;
-  final bool isClaimed;
-
-  const _SquareCell({
-    required this.size,
-    required this.row,
-    required this.col,
-    required this.label,
-    required this.isClaimed,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: size,
-      height: size,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          border: Border.all(color: Colors.black26),
-          color: isClaimed ? Colors.black12 : Colors.white,
-        ),
-        child: Center(
-          child: Text(
-            label,
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 12),
-          ),
-        ),
-      ),
+      child: child,
     );
   }
 }
